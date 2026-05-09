@@ -91,14 +91,16 @@ export class EscrowService {
       throw new Error(`EscrowCreate failed: ${meta.TransactionResult}`);
     }
 
-    // xrpl.js TxResponse 제네릭 타입이 BaseTransaction 필드를 any로 흘려서
-    // Number() 코어션으로 안전하게 number로 narrowing.
-    const seq = Number(result.Sequence);
+    // 최신 rippled는 트랜잭션 필드를 tx_json에 감싸 반환, 구버전은 result에 평탄화.
+    // 두 형태 모두 지원.
+    const txJson = (result as { tx_json?: { Sequence?: number } }).tx_json;
+    const seq = Number(txJson?.Sequence ?? result.Sequence);
     const ledger = Number(result.ledger_index);
-    if (!Number.isFinite(seq) || !Number.isFinite(ledger)) {
-      throw new Error(
-        'EscrowCreate validated response missing Sequence/ledger_index',
-      );
+    if (!Number.isFinite(seq)) {
+      throw new Error('EscrowCreate response missing Sequence');
+    }
+    if (!Number.isFinite(ledger)) {
+      throw new Error('EscrowCreate response missing ledger_index');
     }
 
     this.logger.log(`EscrowCreate OK: hash=${result.hash} seq=${seq}`);
