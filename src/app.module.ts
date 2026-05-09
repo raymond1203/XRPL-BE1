@@ -3,6 +3,11 @@ import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { SharedModule } from './shared/shared.module';
+import { XrplModule } from './xrpl/xrpl.module';
+import { ContractsModule } from './contracts/contracts.module';
+import { ReconcilerModule } from './reconciler/reconciler.module';
+import { QueueModule } from './queue/queue.module';
 
 @Module({
   imports: [
@@ -49,6 +54,11 @@ import { AppService } from './app.service';
         abortEarly: false,
       },
     }),
+    SharedModule,
+    XrplModule,
+    ContractsModule,
+    ReconcilerModule,
+    QueueModule,
   ],
   controllers: [AppController],
   providers: [AppService],
