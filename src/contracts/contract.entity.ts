@@ -30,6 +30,10 @@ export class Contract {
   @Column({ type: 'varchar', length: 35, nullable: true })
   contractAccountAddress!: string | null;
 
+  /** contract account의 seed (AES-GCM 암호문) — 월별 cron이 Payment 서명 시 필요 */
+  @Column({ type: 'text', nullable: true })
+  contractAccountSeedCipher!: string | null;
+
   // 금액 (XRP drops, string 저장 — 64비트 정수도 안전)
   @Column()
   depositAmount!: string;

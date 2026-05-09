@@ -36,6 +36,12 @@ export interface ContractDto {
   tenantAddress: string;
   landlordAddress: string;
   contractAccountAddress: string | null;
+  /**
+   * INTERNAL ONLY — 절대 HTTP 응답에 포함하지 말 것.
+   * 월별 정산 cron이 contract account에서 Payment를 서명하기 위한 seed.
+   * 본선에서 KMS 전환 시 EncryptionService 인터페이스 교체로 처리.
+   */
+  contractAccountSeed: string | null;
   depositAmount: string;
   stakeAmount: string;
   depositEscrowSequence: number | null;
@@ -86,6 +92,14 @@ export class ContractsService {
   async findById(id: string): Promise<ContractDto | null> {
     const found = await this.repo.findOneBy({ id });
     return found ? this.toDto(found) : null;
+  }
+
+  /** 월별 정산 cron이 사용하는 iteration 진입점 */
+  async findAllLocked(): Promise<ContractDto[]> {
+    const rows = await this.repo.find({
+      where: { status: ContractStatus.Locked },
+    });
+    return rows.map((r) => this.toDto(r));
   }
 
   /**
@@ -144,9 +158,15 @@ export class ContractsService {
       quorum: 2,
     });
 
-    // 5. Contract row 업데이트
+    // 5. Contract row 업데이트 (seed도 암호화 영속 — Reconciler가 Payment 서명 시 사용)
+    if (!input.contractWallet.seed) {
+      throw new Error('contractWallet must have a seed for persistence');
+    }
     await this.repo.update(contract.id, {
       contractAccountAddress: input.contractWallet.classicAddress,
+      contractAccountSeedCipher: this.encryption.encrypt(
+        input.contractWallet.seed,
+      ),
       depositEscrowSequence: deposit.escrowSequence,
       depositEscrowTxHash: deposit.txHash,
       stakeEscrowSequence: stake.escrowSequence,
@@ -166,11 +186,19 @@ export class ContractsService {
   }
 
   private toDto(c: Contract): ContractDto {
-    const { tenantPiiCipher, landlordPiiCipher, ...rest } = c;
+    const {
+      tenantPiiCipher,
+      landlordPiiCipher,
+      contractAccountSeedCipher,
+      ...rest
+    } = c;
     return {
       ...rest,
       tenantPii: this.encryption.decrypt(tenantPiiCipher),
       landlordPii: this.encryption.decrypt(landlordPiiCipher),
+      contractAccountSeed: contractAccountSeedCipher
+        ? this.encryption.decrypt(contractAccountSeedCipher)
+        : null,
     };
   }
 }

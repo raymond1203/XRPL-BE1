@@ -58,6 +58,7 @@ describe('ContractsService.lockTenantDeposit (orchestration unit)', () => {
     // ---- 입력 ----
     const contractWallet = {
       classicAddress: CONTRACT_ADDR,
+      seed: 'sEdMockContractSeed1234567890',
     } as unknown as Wallet;
     const finishAfter = new Date('2027-06-07T00:00:00Z');
     const cancelAfter = new Date('2027-06-30T00:00:00Z');
@@ -82,6 +83,7 @@ describe('ContractsService.lockTenantDeposit (orchestration unit)', () => {
       tenantAddress: TENANT_ADDR,
       landlordAddress: LANDLORD_ADDR,
       contractAccountAddress: null,
+      contractAccountSeedCipher: null,
       depositAmount: '50000000',
       stakeAmount: '10000000',
       depositEscrowSequence: null,
@@ -102,6 +104,7 @@ describe('ContractsService.lockTenantDeposit (orchestration unit)', () => {
     const lockedRow: Contract = {
       ...pendingRow,
       contractAccountAddress: CONTRACT_ADDR,
+      contractAccountSeedCipher: 'enc(sEdMockContractSeed1234567890)',
       depositEscrowSequence: 11,
       depositEscrowTxHash: 'A'.repeat(64),
       stakeEscrowSequence: 12,
@@ -176,9 +179,10 @@ describe('ContractsService.lockTenantDeposit (orchestration unit)', () => {
       { account: OPERATOR_ADDR, weight: 1 },
     ]);
 
-    // ---- 검증: repo.update 파라미터 ----
+    // ---- 검증: repo.update 파라미터 (seed 암호문 포함) ----
     expect(repo.update).toHaveBeenCalledWith(CONTRACT_ID, {
       contractAccountAddress: CONTRACT_ADDR,
+      contractAccountSeedCipher: 'enc(sEdMockContractSeed1234567890)',
       depositEscrowSequence: 11,
       depositEscrowTxHash: 'A'.repeat(64),
       stakeEscrowSequence: 12,
@@ -198,6 +202,7 @@ describe('ContractsService.lockTenantDeposit (orchestration unit)', () => {
   it('propagates error if stake escrow fails — Contract row stays Pending (no rollback)', async () => {
     const contractWallet = {
       classicAddress: CONTRACT_ADDR,
+      seed: 'sEdMockContractSeed1234567890',
     } as unknown as Wallet;
     const finishAfter = new Date('2027-06-07T00:00:00Z');
     const cancelAfter = new Date('2027-06-30T00:00:00Z');
