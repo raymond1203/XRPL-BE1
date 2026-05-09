@@ -45,6 +45,9 @@ import { QueueModule } from './queue/queue.module';
         REDIS_HOST: Joi.string().default('localhost'),
         REDIS_PORT: Joi.number().port().default(6379),
 
+        // PII 암호화 (AES-256-GCM, 32바이트 base64)
+        ENCRYPTION_MASTER_KEY: Joi.string().allow('').default(''),
+
         // 한전 파워플래너 API (W6에서 활성화)
         KEPCO_API_KEY: Joi.string().allow('').default(''),
         KEPCO_API_BASE_URL: Joi.string().uri().allow('').default(''),
