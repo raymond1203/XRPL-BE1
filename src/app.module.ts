@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -56,6 +57,17 @@ import { QueueModule } from './queue/queue.module';
         allowUnknown: true,
         abortEarly: false,
       },
+    }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        type: 'postgres' as const,
+        url: cfg.getOrThrow<string>('DATABASE_URL'),
+        autoLoadEntities: true,
+        synchronize: cfg.get<string>('NODE_ENV') !== 'production',
+        retryAttempts: 2,
+        retryDelay: 1000,
+      }),
     }),
     SharedModule,
     XrplModule,
