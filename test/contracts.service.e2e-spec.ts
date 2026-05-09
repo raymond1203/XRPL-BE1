@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { ContractStatus } from '../src/contracts/contract-status.enum';
 import { ContractsService } from '../src/contracts/contracts.service';
+import { XrplClientService } from '../src/xrpl/xrpl-client.service';
 
 /**
  * 실 Postgres 통합 테스트.
@@ -18,6 +19,7 @@ describe('ContractsService (Postgres integration)', () => {
   let app: INestApplication;
   let contractsService: ContractsService;
   let dataSource: DataSource;
+  let xrplClient: XrplClientService;
 
   beforeAll(async () => {
     // ENCRYPTION_MASTER_KEY는 jest-e2e-setup.ts가 setupFiles에서 미리 주입.
@@ -30,6 +32,7 @@ describe('ContractsService (Postgres integration)', () => {
 
     contractsService = app.get(ContractsService);
     dataSource = app.get(DataSource);
+    xrplClient = app.get(XrplClientService);
   }, 60_000);
 
   afterAll(async () => {
@@ -96,5 +99,92 @@ describe('ContractsService (Postgres integration)', () => {
       '00000000-0000-0000-0000-000000000000',
     );
     expect(result).toBeNull();
+  });
+
+  describe('lockTenantDeposit', () => {
+    it('locks deposit + stake escrows + sets 3-of-3 SignerList + persists Contract row', async () => {
+      const client = xrplClient.getClient();
+
+      // 4 wallets 시퀀셜 발급 (faucet rate-limit 회피)
+      const contractFunded = await client.fundWallet();
+      const tenantFunded = await client.fundWallet();
+      const landlordFunded = await client.fundWallet();
+      const operatorFunded = await client.fundWallet();
+      const contract = contractFunded.wallet;
+      const tenant = tenantFunded.wallet;
+      const landlord = landlordFunded.wallet;
+      const operator = operatorFunded.wallet;
+
+      const now = Date.now();
+      const startsAt = new Date(now);
+      const endsAt = new Date(now + 365 * 24 * 3600 * 1000);
+      const finishAfter = new Date(now + 372 * 24 * 3600 * 1000);
+      const cancelAfter = new Date(now + 395 * 24 * 3600 * 1000);
+
+      const tenantPii = JSON.stringify({
+        name: 'Sarah Smith',
+        passport: 'US-PA-123456',
+      });
+      const landlordPii = JSON.stringify({ name: '김임대' });
+
+      const result = await contractsService.lockTenantDeposit({
+        contractWallet: contract,
+        tenantAddress: tenant.classicAddress,
+        landlordAddress: landlord.classicAddress,
+        operatorAddress: operator.classicAddress,
+        depositAmount: '50000000', // 50 XRP
+        stakeAmount: '10000000', // 10 XRP
+        startsAt,
+        endsAt,
+        finishAfter,
+        cancelAfter,
+        tenantPii,
+        landlordPii,
+      });
+
+      // 반환 DTO 검증
+      expect(result.status).toBe(ContractStatus.Locked);
+      expect(result.contractAccountAddress).toBe(contract.classicAddress);
+      expect(result.depositEscrowSequence).toBeGreaterThan(0);
+      expect(result.depositEscrowTxHash).toMatch(/^[A-F0-9]{64}$/);
+      expect(result.stakeEscrowSequence).toBeGreaterThan(0);
+      expect(result.stakeEscrowTxHash).toMatch(/^[A-F0-9]{64}$/);
+      expect(result.signerListTxHash).toMatch(/^[A-F0-9]{64}$/);
+      expect(result.tenantPii).toBe(tenantPii);
+      expect(result.landlordPii).toBe(landlordPii);
+
+      // 실제 ledger 검증: account_objects로 SignerList 조회
+      const objs = await client.request({
+        command: 'account_objects',
+        account: contract.classicAddress,
+        type: 'signer_list',
+      });
+      const signerList = objs.result.account_objects[0] as {
+        LedgerEntryType: string;
+        SignerQuorum: number;
+        SignerEntries: Array<{
+          SignerEntry: { Account: string; SignerWeight: number };
+        }>;
+      };
+      expect(signerList.LedgerEntryType).toBe('SignerList');
+      expect(signerList.SignerQuorum).toBe(2);
+      expect(signerList.SignerEntries).toHaveLength(3);
+
+      const onChainAccounts = signerList.SignerEntries.map(
+        (e) => e.SignerEntry.Account,
+      ).sort();
+      const expectedAccounts = [
+        tenant.classicAddress,
+        landlord.classicAddress,
+        operator.classicAddress,
+      ].sort();
+      expect(onChainAccounts).toEqual(expectedAccounts);
+
+      // DB 영속화 검증: findById로 round-trip
+      const fetched = await contractsService.findById(result.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.status).toBe(ContractStatus.Locked);
+      expect(fetched!.depositEscrowTxHash).toBe(result.depositEscrowTxHash);
+    }, 120_000);
   });
 });
