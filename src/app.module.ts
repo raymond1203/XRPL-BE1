@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -45,6 +46,9 @@ import { QueueModule } from './queue/queue.module';
         REDIS_HOST: Joi.string().default('localhost'),
         REDIS_PORT: Joi.number().port().default(6379),
 
+        // PII 암호화 (AES-256-GCM, 32바이트 base64)
+        ENCRYPTION_MASTER_KEY: Joi.string().allow('').default(''),
+
         // 한전 파워플래너 API (W6에서 활성화)
         KEPCO_API_KEY: Joi.string().allow('').default(''),
         KEPCO_API_BASE_URL: Joi.string().uri().allow('').default(''),
@@ -53,6 +57,17 @@ import { QueueModule } from './queue/queue.module';
         allowUnknown: true,
         abortEarly: false,
       },
+    }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        type: 'postgres' as const,
+        url: cfg.getOrThrow<string>('DATABASE_URL'),
+        autoLoadEntities: true,
+        synchronize: cfg.get<string>('NODE_ENV') !== 'production',
+        retryAttempts: 2,
+        retryDelay: 1000,
+      }),
     }),
     SharedModule,
     XrplModule,
