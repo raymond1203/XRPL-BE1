@@ -41,8 +41,14 @@ export class Contract {
   @Column({ type: 'int', nullable: true })
   depositEscrowSequence!: number | null;
 
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  depositEscrowTxHash!: string | null;
+
   @Column({ type: 'int', nullable: true })
   stakeEscrowSequence!: number | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  stakeEscrowTxHash!: string | null;
 
   @Column({ type: 'varchar', length: 64, nullable: true })
   signerListTxHash!: string | null;
