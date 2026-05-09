@@ -1,0 +1,184 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Payment, Wallet } from 'xrpl';
+import { ContractStatus } from '../contracts/contract-status.enum';
+import { ContractsService } from '../contracts/contracts.service';
+import { XrplClientService } from '../xrpl/xrpl-client.service';
+import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
+import { buildReconcileMemo, sha256Hex } from './payment-memo.builder';
+import { ReconciliationStatus } from './reconciliation-status.enum';
+import { Reconciliation } from './reconciliation.entity';
+
+@Injectable()
+export class ReconcilerService {
+  private readonly logger = new Logger(ReconcilerService.name);
+
+  constructor(
+    @InjectRepository(Reconciliation)
+    private readonly recordRepo: Repository<Reconciliation>,
+    private readonly contractsService: ContractsService,
+    private readonly xrplClient: XrplClientService,
+    @Inject(KEPCO_CLIENT) private readonly kepcoClient: KepcoClient,
+  ) {}
+
+  /**
+   * Cron 진입점 — KST 기준 매월 1일 00:00, 전월 정산.
+   */
+  @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT, {
+    name: 'monthly-reconcile',
+    timeZone: 'Asia/Seoul',
+    waitForCompletion: true,
+  })
+  async monthlyCron(): Promise<void> {
+    const yearMonth = this.previousMonthInKst();
+    this.logger.log(`monthly cron triggered for yearMonth=${yearMonth}`);
+    await this.runMonthlyReconcile(yearMonth);
+  }
+
+  async runMonthlyReconcile(yearMonth: string): Promise<void> {
+    const contracts = await this.contractsService.findAllLocked();
+    this.logger.log(
+      `reconciling ${contracts.length} locked contracts for ${yearMonth}`,
+    );
+    for (const contract of contracts) {
+      try {
+        await this.reconcileContract(contract.id, yearMonth);
+      } catch (err) {
+        // 한 계약 실패가 다른 계약 정산을 막지 않게 swallow + log
+        this.logger.error(
+          `reconcile failed for ${contract.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  async reconcileContract(
+    contractId: string,
+    yearMonth: string,
+  ): Promise<Reconciliation> {
+    const contract = await this.contractsService.findById(contractId);
+    if (!contract) {
+      throw new Error(`Contract ${contractId} not found`);
+    }
+    if (contract.status !== ContractStatus.Locked) {
+      throw new Error(
+        `Contract ${contractId} is not Locked (status=${contract.status})`,
+      );
+    }
+    if (!contract.contractAccountSeed || !contract.contractAccountAddress) {
+      throw new Error(
+        `Contract ${contractId} missing contractAccount info (seed/address)`,
+      );
+    }
+
+    const usage = await this.kepcoClient.getMonthlyUsage({
+      contractId,
+      yearMonth,
+    });
+    const usageHash = sha256Hex(JSON.stringify(usage));
+
+    const baseRecord = {
+      contractId,
+      yearMonth,
+      kepcoUsageKwh: usage.usageKwh,
+      kepcoChargeKrw: usage.chargeKrw,
+      kepcoUsageHash: usageHash,
+    };
+
+    let txHash: string | null = null;
+    let status: ReconciliationStatus = ReconciliationStatus.Matched;
+    let errorMessage: string | null = null;
+    let thrownError: Error | null = null;
+
+    try {
+      txHash = await this.submitPayment(
+        contract.contractAccountAddress,
+        contract.landlordAddress,
+        contract.contractAccountSeed,
+        usage.chargeKrw,
+        {
+          contractId,
+          yearMonth,
+          kepcoUsageHash: usageHash,
+          // 예선: 임대인 청구액 = KEPCO 사용량 (별도 claim entity는 후속)
+          landlordClaimHash: usageHash,
+          calculatedAmountDrops: String(usage.chargeKrw),
+        },
+      );
+    } catch (err) {
+      status = ReconciliationStatus.Failed;
+      errorMessage = (err as Error).message;
+      thrownError = err as Error;
+    }
+
+    const record = await this.recordRepo.save(
+      this.recordRepo.create({
+        ...baseRecord,
+        status,
+        paymentTxHash: txHash,
+        errorMessage,
+      }),
+    );
+
+    if (thrownError) {
+      throw thrownError;
+    }
+
+    this.logger.log(
+      `reconciled ${contractId} ${yearMonth}: tx=${txHash}, ${usage.usageKwh}kWh / ₩${usage.chargeKrw}`,
+    );
+    return record;
+  }
+
+  private async submitPayment(
+    sourceAddress: string,
+    destinationAddress: string,
+    sourceSeed: string,
+    amountKrw: number,
+    memoPayload: Parameters<typeof buildReconcileMemo>[0],
+  ): Promise<string> {
+    // KRW → drops 변환: 예선은 1:1 (oracle은 후속)
+    const amountDrops = String(amountKrw);
+    const memo = buildReconcileMemo(memoPayload);
+    const wallet = Wallet.fromSeed(sourceSeed);
+
+    const tx: Payment = {
+      TransactionType: 'Payment',
+      Account: sourceAddress,
+      Destination: destinationAddress,
+      Amount: amountDrops,
+      Memos: [memo],
+    };
+
+    const client = this.xrplClient.getClient();
+    const response = await client.submitAndWait(tx, { wallet });
+    const meta = response.result.meta;
+    if (typeof meta !== 'object' || meta === null) {
+      throw new Error('Payment response meta missing or string');
+    }
+    if (meta.TransactionResult !== 'tesSUCCESS') {
+      throw new Error(`Payment failed: ${meta.TransactionResult}`);
+    }
+    return response.result.hash;
+  }
+
+  private previousMonthInKst(now: Date = new Date()): string {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Seoul',
+      year: 'numeric',
+      month: '2-digit',
+    });
+    const parts = formatter.formatToParts(now);
+    const year = Number(parts.find((p) => p.type === 'year')?.value);
+    const month = Number(parts.find((p) => p.type === 'month')?.value);
+    let prevYear = year;
+    let prevMonth = month - 1;
+    if (prevMonth === 0) {
+      prevMonth = 12;
+      prevYear -= 1;
+    }
+    return `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+  }
+}

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import * as Joi from 'joi';
 import { AppController } from './app.controller';
@@ -69,6 +70,7 @@ import { QueueModule } from './queue/queue.module';
         retryDelay: 1000,
       }),
     }),
+    ScheduleModule.forRoot(),
     SharedModule,
     XrplModule,
     ContractsModule,
