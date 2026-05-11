@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Client } from 'xrpl';
+import { Client, Wallet, dropsToXrp } from 'xrpl';
 
 @Injectable()
 export class XrplClientService implements OnModuleInit, OnModuleDestroy {
@@ -37,5 +37,31 @@ export class XrplClientService implements OnModuleInit, OnModuleDestroy {
       throw new Error('XRPL client is not connected');
     }
     return this.client;
+  }
+
+  /**
+   * 신규 contract account용 wallet 생성 + Testnet faucet으로 fund.
+   * 동기 호출이라 응답 시간 길어짐(보통 5-15초) — BullMQ 워커 도입 시 비동기 분리 예정.
+   */
+  async generateAndFundWallet(): Promise<Wallet> {
+    const client = this.getClient();
+    const wallet = Wallet.generate();
+    const funded = await client.fundWallet(wallet);
+    this.logger.log(
+      `Wallet funded: address=${funded.wallet.classicAddress} balance=${funded.balance}XRP`,
+    );
+    return funded.wallet;
+  }
+
+  /** account의 XRP 잔액(소수점 표기) 반환 */
+  async getXrpBalance(address: string): Promise<string> {
+    const client = this.getClient();
+    const response = await client.request({
+      command: 'account_info',
+      account: address,
+      ledger_index: 'validated',
+    });
+    const balanceDrops = response.result.account_data.Balance;
+    return dropsToXrp(balanceDrops).toString();
   }
 }

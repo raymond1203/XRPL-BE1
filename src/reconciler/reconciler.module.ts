@@ -8,7 +8,9 @@ import { KepcoApiClient } from './kepco/kepco-api-client';
 import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
 import { KepcoMockClient } from './kepco/kepco-mock-client';
 import { ReconcilerService } from './reconciler.service';
+import { ReconciliationsController } from './reconciliations.controller';
 import { Reconciliation } from './reconciliation.entity';
+import { NotProductionGuard } from '../shared/guards/not-production.guard';
 
 /**
  * 월별 정산 모듈 (W6+).
@@ -24,8 +26,10 @@ import { Reconciliation } from './reconciliation.entity';
     XrplModule,
     ContractsModule,
   ],
+  controllers: [ReconciliationsController],
   providers: [
     ReconcilerService,
+    NotProductionGuard,
     KepcoMockClient,
     KepcoApiClient,
     {
