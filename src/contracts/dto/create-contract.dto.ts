@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsNotEmpty, IsString, Matches } from 'class-validator';
+import {
+  IsDate,
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 /**
  * POST /contracts 입력 DTO.
@@ -49,4 +56,9 @@ export class CreateContractDto {
   @IsString()
   @IsNotEmpty()
   landlordPii!: string;
+
+  /** 월간 리포트 이메일 수신지. 미지정 시 발송 skip. */
+  @IsOptional()
+  @IsEmail()
+  tenantEmail?: string;
 }

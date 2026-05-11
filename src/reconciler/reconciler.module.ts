@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ContractsModule } from '../contracts/contracts.module';
 import { XRPL_TX_RETRY_QUEUE } from '../queue/xrpl-tx-retry.types';
+import { EmailModule } from '../shared/email/email.module';
 import { XrplModule } from '../xrpl/xrpl.module';
 import { KepcoApiClient } from './kepco/kepco-api-client';
 import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
@@ -37,6 +38,7 @@ import { NotProductionGuard } from '../shared/guards/not-production.guard';
     }),
     XrplModule,
     ContractsModule,
+    EmailModule,
   ],
   controllers: [ReconciliationsController],
   providers: [

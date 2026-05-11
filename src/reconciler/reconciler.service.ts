@@ -1,17 +1,26 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import { Payment, Wallet } from 'xrpl';
 import { ContractStatus } from '../contracts/contract-status.enum';
-import { ContractsService } from '../contracts/contracts.service';
+import {
+  ContractsService,
+  type ContractDto,
+} from '../contracts/contracts.service';
 import {
   XRPL_TX_RETRY_QUEUE,
   type XrplTxRetryJob,
 } from '../queue/xrpl-tx-retry.types';
+import {
+  EMAIL_SERVICE,
+  type EmailService,
+} from '../shared/email/email.interface';
 import { XrplClientService } from '../xrpl/xrpl-client.service';
+import { buildMonthlyReportEmail } from './email/monthly-report.template';
 import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
 import { buildReconcileMemo, sha256Hex } from './payment-memo.builder';
 import { ReconciliationStatus } from './reconciliation-status.enum';
@@ -29,6 +38,8 @@ export class ReconcilerService {
     @Inject(KEPCO_CLIENT) private readonly kepcoClient: KepcoClient,
     @InjectQueue(XRPL_TX_RETRY_QUEUE)
     private readonly retryQueue: Queue<XrplTxRetryJob>,
+    @Inject(EMAIL_SERVICE) private readonly emailService: EmailService,
+    private readonly cfg: ConfigService,
   ) {}
 
   /**
@@ -186,7 +197,55 @@ export class ReconcilerService {
     this.logger.log(
       `reconciled ${contractId} ${yearMonth}: tx=${txHash}, ${usage.usageKwh}kWh / ₩${usage.chargeKrw}`,
     );
+
+    // 월간 리포트 이메일 — 발송 실패가 정산을 무효화하지 않게 swallow + log
+    if (txHash) {
+      await this.sendMonthlyReportSafely(record.id, contract, {
+        yearMonth,
+        usageKwh: usage.usageKwh,
+        chargeKrw: usage.chargeKrw,
+        paymentTxHash: txHash,
+      });
+    }
+
     return record;
+  }
+
+  private async sendMonthlyReportSafely(
+    recordId: string,
+    contract: ContractDto,
+    info: {
+      yearMonth: string;
+      usageKwh: number;
+      chargeKrw: number;
+      paymentTxHash: string;
+    },
+  ): Promise<void> {
+    if (!contract.tenantEmail) {
+      this.logger.log(
+        `monthly report skip: contract=${contract.id} no tenantEmail`,
+      );
+      return;
+    }
+    try {
+      const explorerBaseUrl =
+        this.cfg.get<string>('XRPL_EXPLORER_URL') ?? 'https://testnet.xrpl.org';
+      const message = buildMonthlyReportEmail({
+        to: contract.tenantEmail,
+        contractId: contract.id,
+        yearMonth: info.yearMonth,
+        usageKwh: info.usageKwh,
+        chargeKrw: info.chargeKrw,
+        paymentTxHash: info.paymentTxHash,
+        explorerBaseUrl,
+      });
+      await this.emailService.send(message);
+      await this.recordRepo.update(recordId, { reportSentAt: new Date() });
+    } catch (err) {
+      this.logger.error(
+        `monthly report failed for ${contract.id} ${info.yearMonth}: ${(err as Error).message}`,
+      );
+    }
   }
 
   private async submitPayment(

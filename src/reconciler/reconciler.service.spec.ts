@@ -1,10 +1,12 @@
 import { getQueueToken } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Test } from '@nestjs/testing';
 import { Wallet, type Client, type TxResponse } from 'xrpl';
 import { ContractStatus } from '../contracts/contract-status.enum';
 import { ContractsService } from '../contracts/contracts.service';
 import { XRPL_TX_RETRY_QUEUE } from '../queue/xrpl-tx-retry.types';
+import { EMAIL_SERVICE } from '../shared/email/email.interface';
 import { XrplClientService } from '../xrpl/xrpl-client.service';
 import { KEPCO_CLIENT } from './kepco/kepco-client.interface';
 import { ReconcilerService } from './reconciler.service';
@@ -19,12 +21,15 @@ describe('ReconcilerService', () => {
     findOne: jest.Mock;
     find: jest.Mock;
     count: jest.Mock;
+    update: jest.Mock;
   };
   let contractsService: { findById: jest.Mock; findAllLocked: jest.Mock };
   let xrplClient: { getClient: jest.Mock };
   let kepcoClient: { getMonthlyUsage: jest.Mock };
   let mockSubmitAndWait: jest.Mock;
   let retryQueue: { add: jest.Mock };
+  let emailService: { send: jest.Mock };
+  let configService: { get: jest.Mock };
 
   const VALID_SEED = Wallet.generate().seed!;
   const validContract = {
@@ -51,6 +56,7 @@ describe('ReconcilerService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       find: jest.fn(),
       count: jest.fn(),
+      update: jest.fn().mockResolvedValue(undefined),
     };
     contractsService = {
       findById: jest.fn(),
@@ -65,6 +71,12 @@ describe('ReconcilerService', () => {
       getMonthlyUsage: jest.fn(),
     };
     retryQueue = { add: jest.fn().mockResolvedValue(undefined) };
+    emailService = { send: jest.fn().mockResolvedValue(undefined) };
+    configService = {
+      get: jest.fn((k: string) =>
+        k === 'XRPL_EXPLORER_URL' ? 'https://testnet.xrpl.org' : undefined,
+      ),
+    };
 
     const moduleFixture = await Test.createTestingModule({
       providers: [
@@ -74,6 +86,8 @@ describe('ReconcilerService', () => {
         { provide: XrplClientService, useValue: xrplClient },
         { provide: KEPCO_CLIENT, useValue: kepcoClient },
         { provide: getQueueToken(XRPL_TX_RETRY_QUEUE), useValue: retryQueue },
+        { provide: EMAIL_SERVICE, useValue: emailService },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -124,6 +138,42 @@ describe('ReconcilerService', () => {
       }>;
       expect(memos).toHaveLength(1);
       expect(memos[0].Memo.MemoType).toMatch(/^[0-9A-F]+$/);
+    });
+
+    it('tenantEmail 있으면 월간 리포트 이메일 발송 + reportSentAt 업데이트', async () => {
+      contractsService.findById.mockResolvedValue({
+        ...validContract,
+        tenantEmail: 'sarah@example.com',
+      });
+      kepcoClient.getMonthlyUsage.mockResolvedValue(makeUsage());
+      mockSubmitAndWait.mockResolvedValue(makeTesSuccessResponse());
+
+      await service.reconcileContract('c1', '2026-04');
+
+      const sendCalls = emailService.send.mock.calls as Array<
+        [{ to: string; subject: string; text: string }]
+      >;
+      expect(sendCalls).toHaveLength(1);
+      expect(sendCalls[0][0].to).toBe('sarah@example.com');
+      expect(sendCalls[0][0].subject).toContain('2026-04');
+
+      const updateCalls = recordRepo.update.mock.calls as Array<
+        [string, { reportSentAt: Date }]
+      >;
+      expect(updateCalls).toHaveLength(1);
+      expect(updateCalls[0][0]).toBe('rec-uuid');
+      expect(updateCalls[0][1].reportSentAt).toBeInstanceOf(Date);
+    });
+
+    it('tenantEmail 없으면 이메일 발송 skip', async () => {
+      contractsService.findById.mockResolvedValue(validContract);
+      kepcoClient.getMonthlyUsage.mockResolvedValue(makeUsage());
+      mockSubmitAndWait.mockResolvedValue(makeTesSuccessResponse());
+
+      await service.reconcileContract('c1', '2026-04');
+
+      expect(emailService.send).not.toHaveBeenCalled();
+      expect(recordRepo.update).not.toHaveBeenCalled();
     });
 
     it('idempotent: 이미 Matched row 있으면 skip (XRPL 호출 안 함)', async () => {

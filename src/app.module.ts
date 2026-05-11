@@ -55,6 +55,15 @@ import { QueueModule } from './queue/queue.module';
         KEPCO_API_BASE_URL: Joi.string().uri().allow('').default(''),
         // mock 강제 전환 — staging/로컬에서 OPM 호출 우회용
         KEPCO_USE_MOCK: Joi.string().valid('true', 'false').default('false'),
+
+        // 이메일 발송 (월간 리포트)
+        SMTP_HOST: Joi.string().allow('').default(''),
+        SMTP_PORT: Joi.number().port().default(587),
+        SMTP_USER: Joi.string().allow('').default(''),
+        SMTP_PASS: Joi.string().allow('').default(''),
+        EMAIL_FROM: Joi.string().allow('').default(''),
+        // 'true' 시 ConsoleEmailService 강제 (NODE_ENV=test 는 별도 분기로 항상 console)
+        EMAIL_USE_CONSOLE: Joi.string().valid('true', 'false').default('false'),
       }),
       validationOptions: {
         allowUnknown: true,
