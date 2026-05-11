@@ -1,10 +1,16 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import { Payment, Wallet } from 'xrpl';
 import { ContractStatus } from '../contracts/contract-status.enum';
 import { ContractsService } from '../contracts/contracts.service';
+import {
+  XRPL_TX_RETRY_QUEUE,
+  type XrplTxRetryJob,
+} from '../queue/xrpl-tx-retry.types';
 import { XrplClientService } from '../xrpl/xrpl-client.service';
 import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
 import { buildReconcileMemo, sha256Hex } from './payment-memo.builder';
@@ -21,6 +27,8 @@ export class ReconcilerService {
     private readonly contractsService: ContractsService,
     private readonly xrplClient: XrplClientService,
     @Inject(KEPCO_CLIENT) private readonly kepcoClient: KepcoClient,
+    @InjectQueue(XRPL_TX_RETRY_QUEUE)
+    private readonly retryQueue: Queue<XrplTxRetryJob>,
   ) {}
 
   /**
@@ -46,10 +54,15 @@ export class ReconcilerService {
       try {
         await this.reconcileContract(contract.id, yearMonth);
       } catch (err) {
-        // 한 계약 실패가 다른 계약 정산을 막지 않게 swallow + log
+        // 한 계약 실패가 다른 계약 정산을 막지 않게 swallow + log + 큐 enqueue
         this.logger.error(
-          `reconcile failed for ${contract.id}: ${(err as Error).message}`,
+          `reconcile failed for ${contract.id}: ${(err as Error).message} — enqueueing retry`,
         );
+        await this.retryQueue.add('reconcile-payment', {
+          kind: 'reconcile-payment',
+          contractId: contract.id,
+          yearMonth,
+        });
       }
     }
   }
@@ -87,6 +100,21 @@ export class ReconcilerService {
     contractId: string,
     yearMonth: string,
   ): Promise<Reconciliation> {
+    // 멱등성 — 같은 contractId+yearMonth가 이미 Matched면 skip (retry 안전)
+    const alreadyMatched = await this.recordRepo.findOne({
+      where: {
+        contractId,
+        yearMonth,
+        status: ReconciliationStatus.Matched,
+      },
+    });
+    if (alreadyMatched) {
+      this.logger.log(
+        `reconcile skip: ${contractId} ${yearMonth} already matched (tx=${alreadyMatched.paymentTxHash})`,
+      );
+      return alreadyMatched;
+    }
+
     const contract = await this.contractsService.findById(contractId);
     if (!contract) {
       throw new Error(`Contract ${contractId} not found`);
