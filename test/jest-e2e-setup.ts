@@ -11,3 +11,7 @@ import { randomBytes } from 'node:crypto';
  * 사용자 .env에 값이 있더라도 테스트는 랜덤 키 사용(테스트 격리).
  */
 process.env.ENCRYPTION_MASTER_KEY = randomBytes(32).toString('base64');
+
+// NODE_ENV=test 명시 — ReconcilerModule이 KEPCO_CLIENT를 KepcoMockClient로 분기하기 위함
+// (jest 디폴트도 test지만 의존하지 말고 명시).
+process.env.NODE_ENV = 'test';
