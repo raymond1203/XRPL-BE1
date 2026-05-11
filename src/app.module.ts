@@ -50,9 +50,11 @@ import { QueueModule } from './queue/queue.module';
         // PII 암호화 (AES-256-GCM, 32바이트 base64)
         ENCRYPTION_MASTER_KEY: Joi.string().allow('').default(''),
 
-        // 한전 파워플래너 API (W6에서 활성화)
+        // 한전 OPM(Open P-Meter) API
         KEPCO_API_KEY: Joi.string().allow('').default(''),
         KEPCO_API_BASE_URL: Joi.string().uri().allow('').default(''),
+        // mock 강제 전환 — staging/로컬에서 OPM 호출 우회용
+        KEPCO_USE_MOCK: Joi.string().valid('true', 'false').default('false'),
       }),
       validationOptions: {
         allowUnknown: true,

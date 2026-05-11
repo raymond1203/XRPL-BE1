@@ -94,7 +94,9 @@ export class EscrowService {
     // 최신 rippled는 트랜잭션 필드를 tx_json에 감싸 반환, 구버전은 result에 평탄화.
     // 두 형태 모두 지원.
     const txJson = (result as { tx_json?: { Sequence?: number } }).tx_json;
-    const seq = Number(txJson?.Sequence ?? result.Sequence);
+    const seq = Number(
+      txJson?.Sequence ?? (result as { Sequence?: number }).Sequence,
+    );
     const ledger = Number(result.ledger_index);
     if (!Number.isFinite(seq)) {
       throw new Error('EscrowCreate response missing Sequence');
