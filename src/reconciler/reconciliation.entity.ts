@@ -46,6 +46,10 @@ export class Reconciliation {
   @Column({ type: 'text', nullable: true })
   errorMessage!: string | null;
 
+  /** 임차인에게 월간 리포트 이메일 발송된 시각. null = 미발송 (중복 방지용) */
+  @Column({ type: 'timestamptz', nullable: true })
+  reportSentAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 }

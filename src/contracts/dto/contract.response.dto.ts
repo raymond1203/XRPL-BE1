@@ -25,6 +25,7 @@ export interface ContractResponseDto {
   endsAt: Date;
   finishAfter: Date;
   cancelAfter: Date;
+  tenantEmail: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +48,7 @@ export function toContractResponse(dto: ContractDto): ContractResponseDto {
     endsAt: dto.endsAt,
     finishAfter: dto.finishAfter,
     cancelAfter: dto.cancelAfter,
+    tenantEmail: dto.tenantEmail,
     createdAt: dto.createdAt,
     updatedAt: dto.updatedAt,
   };

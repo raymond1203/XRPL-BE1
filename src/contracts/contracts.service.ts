@@ -22,6 +22,8 @@ export interface CreateContractInput {
   cancelAfter: Date;
   tenantPii: string; // 평문 — 암호화는 본 서비스가 처리
   landlordPii: string;
+  /** 월간 리포트 이메일 발송 대상. 부재 시 발송 skip. */
+  tenantEmail?: string | null;
 }
 
 export interface LockTenantDepositInput extends CreateContractInput {
@@ -56,6 +58,7 @@ export interface ContractDto {
   cancelAfter: Date;
   tenantPii: string; // 복호화된 평문
   landlordPii: string;
+  tenantEmail: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -83,6 +86,7 @@ export class ContractsService {
       cancelAfter: input.cancelAfter,
       tenantPiiCipher: this.encryption.encrypt(input.tenantPii),
       landlordPiiCipher: this.encryption.encrypt(input.landlordPii),
+      tenantEmail: input.tenantEmail ?? null,
       status: ContractStatus.Pending,
     });
     const saved = await this.repo.save(entity);

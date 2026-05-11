@@ -82,6 +82,10 @@ export class Contract {
   @Column({ type: 'text' })
   landlordPiiCipher!: string;
 
+  /** 월간 정산 리포트 발송 대상 — 부재 시 발송 skip */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  tenantEmail!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
