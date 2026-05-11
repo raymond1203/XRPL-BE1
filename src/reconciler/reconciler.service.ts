@@ -54,6 +54,35 @@ export class ReconcilerService {
     }
   }
 
+  /** HTTP에서 contractId 기준 정산 이력 조회 */
+  async findReconciliationsByContractId(
+    contractId: string,
+  ): Promise<Reconciliation[]> {
+    return this.recordRepo.find({
+      where: { contractId },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * 수동 트리거. yearMonth 미지정 시 전월(KST), contractId 지정 시 단건만.
+   * dev/staging 데모용 — production 라우트는 가드로 차단.
+   */
+  async runManualReconcile(opts: {
+    yearMonth?: string;
+    contractId?: string;
+  }): Promise<{ yearMonth: string; processed: number }> {
+    const yearMonth = opts.yearMonth ?? this.previousMonthInKst();
+    if (opts.contractId) {
+      await this.reconcileContract(opts.contractId, yearMonth);
+      return { yearMonth, processed: 1 };
+    }
+    const before = await this.recordRepo.count({ where: { yearMonth } });
+    await this.runMonthlyReconcile(yearMonth);
+    const after = await this.recordRepo.count({ where: { yearMonth } });
+    return { yearMonth, processed: after - before };
+  }
+
   async reconcileContract(
     contractId: string,
     yearMonth: string,
