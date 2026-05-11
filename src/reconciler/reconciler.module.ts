@@ -1,8 +1,10 @@
 import { HttpModule } from '@nestjs/axios';
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ContractsModule } from '../contracts/contracts.module';
+import { XRPL_TX_RETRY_QUEUE } from '../queue/xrpl-tx-retry.types';
 import { XrplModule } from '../xrpl/xrpl.module';
 import { KepcoApiClient } from './kepco/kepco-api-client';
 import { KEPCO_CLIENT, type KepcoClient } from './kepco/kepco-client.interface';
@@ -10,6 +12,7 @@ import { KepcoMockClient } from './kepco/kepco-mock-client';
 import { ReconcilerService } from './reconciler.service';
 import { ReconciliationsController } from './reconciliations.controller';
 import { Reconciliation } from './reconciliation.entity';
+import { XrplTxRetryProcessor } from './xrpl-tx-retry.processor';
 import { NotProductionGuard } from '../shared/guards/not-production.guard';
 
 /**
@@ -23,12 +26,22 @@ import { NotProductionGuard } from '../shared/guards/not-production.guard';
   imports: [
     TypeOrmModule.forFeature([Reconciliation]),
     HttpModule,
+    BullModule.registerQueue({
+      name: XRPL_TX_RETRY_QUEUE,
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 5_000 },
+        removeOnComplete: 100,
+        removeOnFail: 100,
+      },
+    }),
     XrplModule,
     ContractsModule,
   ],
   controllers: [ReconciliationsController],
   providers: [
     ReconcilerService,
+    XrplTxRetryProcessor,
     NotProductionGuard,
     KepcoMockClient,
     KepcoApiClient,

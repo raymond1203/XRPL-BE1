@@ -1,8 +1,10 @@
+import { getQueueToken } from '@nestjs/bullmq';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Test } from '@nestjs/testing';
 import { Wallet, type Client, type TxResponse } from 'xrpl';
 import { ContractStatus } from '../contracts/contract-status.enum';
 import { ContractsService } from '../contracts/contracts.service';
+import { XRPL_TX_RETRY_QUEUE } from '../queue/xrpl-tx-retry.types';
 import { XrplClientService } from '../xrpl/xrpl-client.service';
 import { KEPCO_CLIENT } from './kepco/kepco-client.interface';
 import { ReconcilerService } from './reconciler.service';
@@ -14,13 +16,16 @@ describe('ReconcilerService', () => {
   let recordRepo: {
     create: jest.Mock;
     save: jest.Mock;
+    findOne: jest.Mock;
+    find: jest.Mock;
+    count: jest.Mock;
   };
   let contractsService: { findById: jest.Mock; findAllLocked: jest.Mock };
   let xrplClient: { getClient: jest.Mock };
   let kepcoClient: { getMonthlyUsage: jest.Mock };
   let mockSubmitAndWait: jest.Mock;
+  let retryQueue: { add: jest.Mock };
 
-  // 테스트 실행마다 신규 유효 seed (정적 시드 박기 함정 회피)
   const VALID_SEED = Wallet.generate().seed!;
   const validContract = {
     id: 'c1',
@@ -43,6 +48,9 @@ describe('ReconcilerService', () => {
           createdAt: new Date(),
         }),
       ),
+      findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn(),
+      count: jest.fn(),
     };
     contractsService = {
       findById: jest.fn(),
@@ -56,6 +64,7 @@ describe('ReconcilerService', () => {
     kepcoClient = {
       getMonthlyUsage: jest.fn(),
     };
+    retryQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const moduleFixture = await Test.createTestingModule({
       providers: [
@@ -64,6 +73,7 @@ describe('ReconcilerService', () => {
         { provide: ContractsService, useValue: contractsService },
         { provide: XrplClientService, useValue: xrplClient },
         { provide: KEPCO_CLIENT, useValue: kepcoClient },
+        { provide: getQueueToken(XRPL_TX_RETRY_QUEUE), useValue: retryQueue },
       ],
     }).compile();
 
@@ -103,7 +113,6 @@ describe('ReconcilerService', () => {
       expect(record.kepcoChargeKrw).toBe(24000);
       expect(record.kepcoUsageHash).toMatch(/^[0-9a-f]{64}$/);
 
-      // Payment TX 구조 검증
       const [tx] = mockSubmitAndWait.mock.calls[0] as [Record<string, unknown>];
       expect(tx.TransactionType).toBe('Payment');
       expect(tx.Account).toBe(validContract.contractAccountAddress);
@@ -115,6 +124,24 @@ describe('ReconcilerService', () => {
       }>;
       expect(memos).toHaveLength(1);
       expect(memos[0].Memo.MemoType).toMatch(/^[0-9A-F]+$/);
+    });
+
+    it('idempotent: 이미 Matched row 있으면 skip (XRPL 호출 안 함)', async () => {
+      const matched = {
+        id: 'rec-existing',
+        contractId: 'c1',
+        yearMonth: '2026-04',
+        status: ReconciliationStatus.Matched,
+        paymentTxHash: 'P'.repeat(64),
+      } as Reconciliation;
+      recordRepo.findOne.mockResolvedValueOnce(matched);
+
+      const record = await service.reconcileContract('c1', '2026-04');
+
+      expect(record).toBe(matched);
+      expect(contractsService.findById).not.toHaveBeenCalled();
+      expect(kepcoClient.getMonthlyUsage).not.toHaveBeenCalled();
+      expect(mockSubmitAndWait).not.toHaveBeenCalled();
     });
 
     it('throws when contract not found', async () => {
@@ -163,13 +190,12 @@ describe('ReconcilerService', () => {
   });
 
   describe('runMonthlyReconcile', () => {
-    it('iterates locked contracts and continues despite individual failures', async () => {
+    it('iterates locked contracts and enqueues retry on individual failure', async () => {
       contractsService.findAllLocked.mockResolvedValue([
         { id: 'c1' },
         { id: 'c2' },
       ]);
 
-      // 첫 호출 throw, 두 번째 성공 → 두 호출 모두 수행되어야 함 (swallow)
       const reconcileSpy = jest
         .spyOn(service, 'reconcileContract')
         .mockRejectedValueOnce(new Error('c1 boom'))
@@ -182,6 +208,13 @@ describe('ReconcilerService', () => {
       expect(reconcileSpy).toHaveBeenCalledTimes(2);
       expect(reconcileSpy).toHaveBeenNthCalledWith(1, 'c1', '2026-04');
       expect(reconcileSpy).toHaveBeenNthCalledWith(2, 'c2', '2026-04');
+      // c1 실패 → 큐에 enqueue, c2 성공 → 큐 호출 없음
+      expect(retryQueue.add).toHaveBeenCalledTimes(1);
+      expect(retryQueue.add).toHaveBeenCalledWith('reconcile-payment', {
+        kind: 'reconcile-payment',
+        contractId: 'c1',
+        yearMonth: '2026-04',
+      });
     });
   });
 });
